@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Mini Discord Web - Chat + Vocal/Video</title>
+<title>Mini Discord Web - Audio Only</title>
 <style>
 body { margin:0; font-family:Arial; display:flex; height:100vh; background:#36393f; color:white; }
 #sidebar { width:220px; background:#2f3136; padding:10px; }
@@ -14,9 +14,8 @@ body { margin:0; font-family:Arial; display:flex; height:100vh; background:#3639
 #inputArea { display:flex; margin:10px; }
 #inputArea input[type=text] { flex:1; padding:8px; border-radius:5px; border:none; margin-right:5px; }
 #inputArea button { padding:8px; border-radius:5px; border:none; background:#5865f2; color:white; cursor:pointer; }
-#participants { display:flex; flex-wrap:wrap; padding:10px; gap:10px; }
-.videoBox { display:flex; flex-direction:column; align-items:center; }
-video { width:160px; height:120px; border-radius:10px; background:black; border:3px solid transparent; }
+#audioParticipants { display:flex; flex-direction:column; padding:10px; gap:5px; }
+.audioBox { display:flex; align-items:center; gap:5px; }
 </style>
 </head>
 <body>
@@ -43,7 +42,7 @@ video { width:160px; height:120px; border-radius:10px; background:black; border:
     <input type="text" id="messageInput" placeholder="Message...">
     <button id="sendBtn">Envoyer</button>
   </div>
-  <div id="participants"></div>
+  <div id="audioParticipants"></div>
 </div>
 
 <script type="module">
@@ -69,11 +68,10 @@ const rtdb = getDatabase(app);
 const auth = getAuth(app);
 await signInAnonymously(auth);
 
-// --- Variables chat ---
+// --- Chat ---
 let currentTextRoom = 'general';
 const messagesDiv = document.getElementById("messages");
 
-// --- Chat fonctions ---
 window.selectRoomText = function(room){
   currentTextRoom = room;
   loadMessages();
@@ -84,10 +82,7 @@ async function sendMessage(){
   const username = document.getElementById("username").value.trim();
   if(!username) return alert("Pseudo requis !");
   if(!text) return alert("Message requis !");
-
-  await addDoc(collection(db, currentTextRoom), {
-    text, username, created: Date.now()
-  });
+  await addDoc(collection(db, currentTextRoom), {text, username, created: Date.now()});
   document.getElementById("messageInput").value = "";
 }
 
@@ -112,7 +107,7 @@ function loadMessages(){
 
 loadMessages();
 
-// --- Vocal / Video ---
+// --- Audio Only ---
 let localStream;
 let peers = {};
 let myId;
@@ -126,8 +121,9 @@ document.getElementById("joinBtn").addEventListener("click", async ()=>{
   const username = document.getElementById("username").value.trim();
   if(!username) return alert("Pseudo requis !");
   myId = idGen();
-  localStream = await navigator.mediaDevices.getUserMedia({audio:true,video:true});
-  createVideo(myId, localStream, username);
+  localStream = await navigator.mediaDevices.getUserMedia({audio:true, video:false});
+
+  addAudio(myId, localStream, username);
 
   set(ref(rtdb, `voice/${currentVoiceRoom}/${myId}`), {username});
   onValue(ref(rtdb, `voice/${currentVoiceRoom}`), snap=>{
@@ -146,7 +142,7 @@ document.getElementById("leaveBtn").addEventListener("click", ()=>{
   for(let id in peers) peers[id].close();
   peers={};
   if(localStream) localStream.getTracks().forEach(t=>t.stop());
-  document.getElementById("participants").innerHTML="";
+  document.getElementById("audioParticipants").innerHTML="";
   remove(ref(rtdb, `voice/${currentVoiceRoom}/${myId}`));
 });
 
@@ -160,7 +156,7 @@ async function createPeer(remoteId, remoteName, initiator=false){
     if(e.candidate) push(ref(rtdb, `signals/${remoteId}`), {from: myId, type:"candidate", candidate:e.candidate});
   };
 
-  pc.ontrack = e=>{ createVideo(remoteId, e.streams[0], remoteName); }
+  pc.ontrack = e=>{ addAudio(remoteId, e.streams[0], remoteName); }
 
   peers[remoteId] = pc;
 
@@ -195,23 +191,21 @@ function listenSignals(){
   });
 }
 
-// --- Création vidéo ---
-function createVideo(id, stream, name){
-  if(document.getElementById("box-"+id)) return;
+// --- Ajouter audio ---
+function addAudio(id, stream, name){
+  if(document.getElementById("audio-"+id)) return;
   const box = document.createElement("div");
-  box.className="videoBox";
-  box.id = "box-"+id;
-  const video = document.createElement("video");
-  video.autoplay=true;
-  video.playsInline=true;
-  video.srcObject = stream;
-  const label = document.createElement("div");
+  box.className="audioBox";
+  box.id="audio-"+id;
+  const label = document.createElement("span");
   label.textContent=name;
-  box.appendChild(video);
+  const audio = document.createElement("audio");
+  audio.autoplay=true;
+  audio.srcObject=stream;
   box.appendChild(label);
-  document.getElementById("participants").appendChild(box);
+  box.appendChild(audio);
+  document.getElementById("audioParticipants").appendChild(box);
 }
-
 </script>
 </body>
 </html>
