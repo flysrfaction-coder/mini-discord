@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Mini Discord Web - Chat + Vocal/Video</title>
+<style>
+body { margin:0; font-family:Arial; display:flex; height:100vh; background:#36393f; color:white; }
+#sidebar { width:220px; background:#2f3136; padding:10px; }
+#sidebar h3 { color:#7289da; }
+#sidebar input { width:100%; padding:8px; border-radius:5px; border:none; margin-bottom:5px; }
+#sidebar button { width:100%; margin:5px 0; padding:8px; border:none; border-radius:5px; cursor:pointer; background:#5865f2; color:white; }
+#main { flex:1; display:flex; flex-direction:column; }
+#messages { flex:1; overflow-y:auto; padding:10px; background:#2f3136; border-radius:5px; }
+#inputArea { display:flex; margin:10px; }
+#inputArea input[type=text] { flex:1; padding:8px; border-radius:5px; border:none; margin-right:5px; }
+#inputArea button { padding:8px; border-radius:5px; border:none; background:#5865f2; color:white; cursor:pointer; }
+#participants { display:flex; flex-wrap:wrap; padding:10px; gap:10px; }
+.videoBox { display:flex; flex-direction:column; align-items:center; }
+video { width:160px; height:120px; border-radius:10px; background:black; border:3px solid transparent; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h3>Mini Discord</h3>
+  <input type="text" id="username" placeholder="Pseudo (obligatoire)">
+  
+  <h4>Salons texte</h4>
+  <button onclick="selectRoomText('general')"># general</button>
+  <button onclick="selectRoomText('gaming')"># gaming</button>
+
+  <h4>Salons vocal</h4>
+  <button onclick="selectRoomVoice('voice_general')">Général</button>
+  <button onclick="selectRoomVoice('voice_gaming')">Gaming</button>
+
+  <button id="joinBtn">Rejoindre vocal</button>
+  <button id="leaveBtn">Quitter vocal</button>
+</div>
+
+<div id="main">
+  <div id="messages"></div>
+  <div id="inputArea">
+    <input type="text" id="messageInput" placeholder="Message...">
+    <button id="sendBtn">Envoyer</button>
+  </div>
+  <div id="participants"></div>
+</div>
+
+<script type="module">
+// --- Firebase CDN ---
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getDatabase, ref, set, remove, onValue, push, onChildAdded, get } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// --- Config Firebase ---
+const firebaseConfig = {
+  apiKey: "AIzaSyCx3jJ4Q5j3U13ZyU1nBXNbZiZ31KxtMsM",
+  authDomain: "mini-discord-electron.firebaseapp.com",
+  projectId: "mini-discord-electron",
+  storageBucket: "mini-discord-electron.firebasestorage.app",
+  messagingSenderId: "772597694473",
+  appId: "1:772597694473:web:b93c688aa848da59bef8d8"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+const rtdb = getDatabase(app);
+const auth = getAuth(app);
+await signInAnonymously(auth);
+
+// --- Variables chat ---
+let currentTextRoom = 'general';
+const messagesDiv = document.getElementById("messages");
+
+// --- Chat fonctions ---
+window.selectRoomText = function(room){
+  currentTextRoom = room;
+  loadMessages();
+}
+
+async function sendMessage(){
+  const text = document.getElementById("messageInput").value.trim();
+  const username = document.getElementById("username").value.trim();
+  if(!username) return alert("Pseudo requis !");
+  if(!text) return alert("Message requis !");
+
+  await addDoc(collection(db, currentTextRoom), {
+    text, username, created: Date.now()
+  });
+  document.getElementById("messageInput").value = "";
+}
+
+document.getElementById("sendBtn").addEventListener("click", sendMessage);
+document.getElementById("messageInput").addEventListener("keypress", e => { if(e.key==="Enter") sendMessage(); });
+
+function loadMessages(){
+  messagesDiv.innerHTML="";
+  const q = query(collection(db, currentTextRoom), orderBy("created"));
+  onSnapshot(q, snapshot => {
+    messagesDiv.innerHTML="";
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const div = document.createElement("div");
+      div.textContent = data.username + ": " + data.text;
+      div.style.marginBottom="5px";
+      messagesDiv.appendChild(div);
+    });
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+  });
+}
+
+loadMessages();
+
+// --- Vocal / Video ---
+let localStream;
+let peers = {};
+let myId;
+let currentVoiceRoom;
+
+function idGen(){ return Math.random().toString(36).substring(2,9); }
+window.selectRoomVoice = function(room){ currentVoiceRoom = room; }
+
+// --- Rejoindre vocal ---
+document.getElementById("joinBtn").addEventListener("click", async ()=>{
+  const username = document.getElementById("username").value.trim();
+  if(!username) return alert("Pseudo requis !");
+  myId = idGen();
+  localStream = await navigator.mediaDevices.getUserMedia({audio:true,video:true});
+  createVideo(myId, localStream, username);
+
+  set(ref(rtdb, `voice/${currentVoiceRoom}/${myId}`), {username});
+  onValue(ref(rtdb, `voice/${currentVoiceRoom}`), snap=>{
+    snap.forEach(child=>{
+      const remoteId = child.key;
+      const data = child.val();
+      if(remoteId !== myId && !peers[remoteId]) createPeer(remoteId, data.username, true);
+    });
+  });
+
+  listenSignals();
+});
+
+// --- Quitter vocal ---
+document.getElementById("leaveBtn").addEventListener("click", ()=>{
+  for(let id in peers) peers[id].close();
+  peers={};
+  if(localStream) localStream.getTracks().forEach(t=>t.stop());
+  document.getElementById("participants").innerHTML="";
+  remove(ref(rtdb, `voice/${currentVoiceRoom}/${myId}`));
+});
+
+// --- PeerConnection ---
+async function createPeer(remoteId, remoteName, initiator=false){
+  if(peers[remoteId]) return;
+  const pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.l.google.com:19302"}]});
+  localStream.getTracks().forEach(t=>pc.addTrack(t, localStream));
+
+  pc.onicecandidate = e=>{
+    if(e.candidate) push(ref(rtdb, `signals/${remoteId}`), {from: myId, type:"candidate", candidate:e.candidate});
+  };
+
+  pc.ontrack = e=>{ createVideo(remoteId, e.streams[0], remoteName); }
+
+  peers[remoteId] = pc;
+
+  if(initiator){
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    push(ref(rtdb, `signals/${remoteId}`), {from: myId, type:"offer", sdp:offer.sdp});
+  }
+}
+
+function listenSignals(){
+  onChildAdded(ref(rtdb, `signals/${myId}`), async snap=>{
+    const data = snap.val();
+    const fromId = data.from;
+    if(!peers[fromId]){
+      const snap2 = await get(ref(rtdb, `voice/${currentVoiceRoom}/${fromId}`));
+      const name = snap2.val()?.username || "Invité";
+      await createPeer(fromId, name, false);
+    }
+    const pc = peers[fromId];
+    if(data.type==="offer"){
+      await pc.setRemoteDescription({type:"offer", sdp:data.sdp});
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      push(ref(rtdb, `signals/${fromId}`), {from: myId, type:"answer", sdp:answer.sdp});
+    } else if(data.type==="answer"){
+      await pc.setRemoteDescription({type:"answer", sdp:data.sdp});
+    } else if(data.type==="candidate"){
+      try{ await pc.addIceCandidate(data.candidate); } catch(e){ console.warn(e); }
+    }
+    remove(ref(rtdb, `signals/${myId}/${snap.key}`));
+  });
+}
+
+// --- Création vidéo ---
+function createVideo(id, stream, name){
+  if(document.getElementById("box-"+id)) return;
+  const box = document.createElement("div");
+  box.className="videoBox";
+  box.id = "box-"+id;
+  const video = document.createElement("video");
+  video.autoplay=true;
+  video.playsInline=true;
+  video.srcObject = stream;
+  const label = document.createElement("div");
+  label.textContent=name;
+  box.appendChild(video);
+  box.appendChild(label);
+  document.getElementById("participants").appendChild(box);
+}
+
+</script>
+</body>
+</html>
